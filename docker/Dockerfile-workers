@@ -71,6 +71,16 @@ RUN sed -i -e 's|^#mount_program|mount_program|g' /etc/containers/storage.conf
 COPY docker/libpod.conf /usr/share/containers/libpod.conf
 
 COPY . .
+RUN mkdir -p /root/.docker
+RUN touch /root/.docker/config.json.template
+RUN chmod 777 /root/.docker/config.json.template
+ADD docker/docker-config.json /root/.docker/config.json.template
+
+RUN wget -O /etc/pki/ca-trust/source/anchors/RH-IT-Root-CA.crt https://certs.corp.redhat.com/certs/2015-IT-Root-CA.pem
+RUN wget -O /etc/pki/ca-trust/source/anchors/2022-IT-Root-CA.pem https://certs.corp.redhat.com/certs/2022-IT-Root-CA.pem
+ADD https://certs.corp.redhat.com/certs/2015-IT-Root-CA.pem https://certs.corp.redhat.com/certs/2022-IT-Root-CA.pem /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust
+
 
 # Prepare writable HOME for OpenShift random UID runtime.
 RUN mkdir -p /home/iib-worker/.docker \
