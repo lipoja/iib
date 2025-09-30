@@ -20,6 +20,7 @@ from iib.workers.tasks.opm_operations import (
     _get_olm_bundle_version,
     get_list_bundles,
     get_operator_package_list,
+    get_list_package_names,
 )
 
 
@@ -1361,3 +1362,46 @@ def test_get_operator_package_list(mock_run_cmd, mock_gidp, tmpdir):
         {'cwd': tmpdir},
         exc_msg=f'Failed to run opm render with input: {input_image}',
     )
+
+
+@mock.patch('iib.workers.tasks.opm_operations.opm_render')
+def test_get_list_package_names_success(mock_opm_render):
+    mock_opm_render.return_value = [
+        {"schema": "olm.package", "name": "package-a"},
+        {"schema": "olm.package", "name": "package-b"},
+        {"schema": "olm.other", "name": "other-resource"},
+    ]
+    input_data = "catalog-image"
+    base_dir = "/tmp/test-opm"
+
+    result = get_list_package_names(input_data, base_dir)
+
+    assert result == ["package-a", "package-b"]
+    mock_opm_render.assert_called_once_with(input_data, base_dir)
+
+
+@mock.patch('iib.workers.tasks.opm_operations.opm_render')
+def test_get_list_package_names_empty(mock_opm_render):
+    mock_opm_render.return_value = []
+    input_data = "catalog-image"
+    base_dir = "/tmp/test-opm"
+
+    result = get_list_package_names(input_data, base_dir)
+
+    assert result == []
+    mock_opm_render.assert_called_once_with(input_data, base_dir)
+
+
+@mock.patch('iib.workers.tasks.opm_operations.opm_render')
+def test_get_list_package_names_invalid_data(mock_opm_render):
+    mock_opm_render.return_value = [
+        {"schema": "olm.other", "name": "other-resource"},
+        {"schema": "not.package", "name": "invalid-package"},
+    ]
+    input_data = "bundle-image"
+    base_dir = "/tmp/test-opm"
+
+    result = get_list_package_names(input_data, base_dir)
+
+    assert result == []
+    mock_opm_render.assert_called_once_with(input_data, base_dir)

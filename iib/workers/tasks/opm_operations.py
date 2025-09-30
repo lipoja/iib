@@ -394,6 +394,31 @@ def get_list_bundles(
     return olm_bundles
 
 
+def get_list_package_names(
+    input_data: str,
+    base_dir: str,
+) -> List[str]:
+    """
+    Run OPM render to get a list of packagenames in input data.
+
+    :param str input_data: input data for opm render
+        Example: catalog-image | catalog-directory | bundle-image | bundle-directory | sqlite-file
+    :param str base_dir: temp directory where opm will be executed.
+    :return: list of package names parsed from input data
+    :rtype: list(str)
+    """
+    log.info("Get list of bundles from %s", input_data)
+
+    opm_data = opm_render(input_data, base_dir)
+
+    # convert opm data to a list of package names
+    olm_package_names: List[str] = [
+        olm_package["name"] for olm_package in opm_data if olm_package['schema'] == 'olm.package'
+    ]
+
+    return olm_package_names
+
+
 def opm_render(
     input_data: str,
     base_dir: str,

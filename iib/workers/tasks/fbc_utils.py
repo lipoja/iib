@@ -10,10 +10,12 @@ from pathlib import Path
 from typing import Tuple, List
 
 import ruamel.yaml
+from packaging.version import Version
 
 from iib.exceptions import IIBError
 from iib.workers.config import get_worker_config
 from iib.common.tracing import instrument_tracing
+from iib.workers.tasks.opm_operations import Opm
 
 log = logging.getLogger(__name__)
 yaml = ruamel.yaml.YAML()
@@ -102,6 +104,85 @@ def merge_catalogs_dirs(src_config: str, dest_config: str):
     opm_validate(conf_dir)
 
 
+def _get_catalog_path(image_pullspec: str) -> str:
+    """
+    Retrieve the catalog path associated with a specific image pull specification.
+
+    :param str image_pullspec: The image pull specification from which the catalog path needs to
+        be retrieved.
+    :return: The catalog path associated with the image pull specification.
+    :rtype: str
+    """
+    from iib.workers.tasks.utils import get_image_label
+
+    conf = get_worker_config()
+    catalog_path = get_image_label(
+        image_pullspec, 'operators.operatorframework.io.index.configs.v1'
+    )
+    if not catalog_path:
+        catalog_path = conf['fbc_fragment_catalog_path']
+
+    return catalog_path
+
+
+def _extract_fbc_data_using_copy(temp_dir: str, fbc_fragment: str, fragment_index: int = 0) -> str:
+    from iib.workers.tasks.build import _copy_files_from_image
+
+    from iib.workers.tasks.opm_operations import opm_migrate
+
+    log.info("Extracting the fbc_fragment's catalog from  %s", fbc_fragment)
+    # store the fbc_fragment at /tmp/iib-**/fbc-fragment-{index} to prevent
+    # cross-contamination
+    conf = get_worker_config()
+    fbc_fragment_path = os.path.join(temp_dir, f"{conf['temp_fbc_fragment_path']}-{fragment_index}")
+    fbc_fragment_path_original = os.path.join(
+        temp_dir, f"{conf['temp_fbc_fragment_path']}-original-{fragment_index}"
+    )
+    # ensure directories exist
+    os.makedirs(fbc_fragment_path, exist_ok=True)
+    os.makedirs(fbc_fragment_path_original, exist_ok=True)
+    # get catalog path from fbc_fragment
+    catalog_path = _get_catalog_path(fbc_fragment)
+    # copy fbc_fragment's catalog to /tmp/iib-**/fbc-fragment-{index}
+    _copy_files_from_image(fbc_fragment, catalog_path, fbc_fragment_path_original)
+    # Run opm migrate on the fbc_fragment to ensure standard catalog paths
+
+    opm_migrate(fbc_fragment_path_original, fbc_fragment_path, generate_cache=False)
+
+    log.info("fbc_fragment extracted at %s", fbc_fragment_path_original)
+    return fbc_fragment_path
+
+
+def _extract_fbc_data_using_opm_migrate(
+    temp_dir: str, fbc_fragment: str, fragment_index: int = 0
+) -> str:
+    from iib.workers.tasks.build import _copy_files_from_image
+
+    from iib.workers.tasks.opm_operations import opm_migrate
+
+    log.info("Extracting the fbc_fragment's catalog from  %s", fbc_fragment)
+    # store the fbc_fragment at /tmp/iib-**/fbc-fragment-{index} to prevent
+    # cross-contamination
+    conf = get_worker_config()
+    fbc_fragment_path = os.path.join(temp_dir, f"{conf['temp_fbc_fragment_path']}-{fragment_index}")
+    fbc_fragment_path_original = os.path.join(
+        temp_dir, f"{conf['temp_fbc_fragment_path']}-original-{fragment_index}"
+    )
+    # ensure directories exist
+    os.makedirs(fbc_fragment_path, exist_ok=True)
+    os.makedirs(fbc_fragment_path_original, exist_ok=True)
+    # get catalog path from fbc_fragment
+    catalog_path = _get_catalog_path(fbc_fragment)
+    # copy fbc_fragment's catalog to /tmp/iib-**/fbc-fragment-{index}
+    _copy_files_from_image(fbc_fragment, catalog_path, fbc_fragment_path_original)
+    # Run opm migrate on the fbc_fragment to ensure standard catalog paths
+
+    opm_migrate(fbc_fragment_path_original, fbc_fragment_path, generate_cache=False)
+
+    log.info("fbc_fragment extracted at %s", fbc_fragment_path_original)
+    return fbc_fragment_path
+
+
 def extract_fbc_fragment(
     temp_dir: str, fbc_fragment: str, fragment_index: int = 0
 ) -> Tuple[str, List[str]]:
@@ -115,17 +196,16 @@ def extract_fbc_fragment(
     :return: fbc_fragment path, fbc_operator_packages.
     :rtype: tuple
     """
-    from iib.workers.tasks.build import _copy_files_from_image
+    # opm version v1.37.0 supports rendering from FBC
+    # https://github.com/operator-framework/operator-registry/releases/tag/v1.37.0
+    opm_version_number = Opm.get_opm_version_number()
+    if Version(opm_version_number) >= Version("v1.37.0"):
+        fbc_fragment_path = _extract_fbc_data_using_opm_migrate(
+            temp_dir, fbc_fragment, fragment_index
+        )
+    else:
+        fbc_fragment_path = _extract_fbc_data_using_copy(temp_dir, fbc_fragment, fragment_index)
 
-    log.info("Extracting the fbc_fragment's catalog from  %s", fbc_fragment)
-    # store the fbc_fragment at /tmp/iib-**/fbc-fragment-{index} to prevent
-    # cross-contamination
-    conf = get_worker_config()
-    fbc_fragment_path = os.path.join(temp_dir, f"{conf['temp_fbc_fragment_path']}-{fragment_index}")
-    # Copy fbc_fragment's catalog to /tmp/iib-**/fbc-fragment-{index}
-    _copy_files_from_image(fbc_fragment, conf['fbc_fragment_catalog_path'], fbc_fragment_path)
-
-    log.info("fbc_fragment extracted at %s", fbc_fragment_path)
     operator_packages = os.listdir(fbc_fragment_path)
     log.info("fbc_fragment contains packages %s", operator_packages)
     if not operator_packages:
